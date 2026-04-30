@@ -15,9 +15,10 @@ public class ConsistencyValidator {
             VectorizationResult sequentialResult,
             int threadCount
     ) {
-        TextVectorizer parallelVectorizer = new ParallelTfidfVectorizer(threadCount);
-        VectorizationResult parallelResult = parallelVectorizer.vectorize(documents);
-        return areEqual(sequentialResult, parallelResult);
+        try (ParallelTfidfVectorizer parallelVectorizer = new ParallelTfidfVectorizer(threadCount)) {
+            VectorizationResult parallelResult = parallelVectorizer.vectorize(documents);
+            return areEqual(sequentialResult, parallelResult);
+        }
     }
 
     private boolean areEqual(VectorizationResult left, VectorizationResult right) {

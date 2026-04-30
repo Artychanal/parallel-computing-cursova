@@ -12,7 +12,13 @@ import java.util.stream.Stream;
 
 public class CorpusLoader {
 
+    private static final int PROGRESS_STEP = 1000;
+
     public List<DocumentData> loadFromDirectory(Path directory) {
+        return loadFromDirectory(directory, Integer.MAX_VALUE);
+    }
+
+    public List<DocumentData> loadFromDirectory(Path directory, int maxDocuments) {
         List<DocumentData> documents = new ArrayList<DocumentData>();
 
         if (!Files.exists(directory) || !Files.isDirectory(directory)) {
@@ -20,15 +26,27 @@ public class CorpusLoader {
         }
 
         try (Stream<Path> paths = Files.walk(directory)) {
-            paths.filter(Files::isRegularFile)
+            Stream<Path> documentStream = paths.filter(Files::isRegularFile)
                     .filter(this::isTextFile)
-                    .sorted()
-                    .forEach(path -> documents.add(new DocumentData(
-                            path.getFileName().toString(),
-                            readText(path)
-                    )));
+                    .sorted();
+
+            if (maxDocuments < Integer.MAX_VALUE) {
+                documentStream = documentStream.limit(maxDocuments);
+            }
+
+            documentStream
+                    .forEach(path -> {
+                        documents.add(new DocumentData(
+                                path.getFileName().toString(),
+                                readText(path)
+                        ));
+
+                        if (documents.size() % PROGRESS_STEP == 0) {
+                            System.out.println("Loaded " + documents.size() + " documents...");
+                        }
+                    });
         } catch (IOException exception) {
-            throw new IllegalStateException("Не вдалося зчитати директорію з документами: " + directory, exception);
+            throw new IllegalStateException("Failed to read document directory: " + directory, exception);
         }
 
         return documents;
@@ -43,7 +61,7 @@ public class CorpusLoader {
         try {
             return Files.readString(path, StandardCharsets.UTF_8);
         } catch (IOException exception) {
-            throw new IllegalStateException("Не вдалося зчитати файл: " + path, exception);
+            throw new IllegalStateException("Failed to read file: " + path, exception);
         }
     }
 }
