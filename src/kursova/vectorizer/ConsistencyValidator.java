@@ -21,7 +21,7 @@ public class ConsistencyValidator {
         }
     }
 
-    private boolean areEqual(VectorizationResult left, VectorizationResult right) {
+    public boolean areEqual(VectorizationResult left, VectorizationResult right) {
         if (!left.getVocabulary().equals(right.getVocabulary())) {
             return false;
         }

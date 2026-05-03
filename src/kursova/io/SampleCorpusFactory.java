@@ -30,6 +30,23 @@ public final class SampleCorpusFactory {
         return documents;
     }
 
+    public static List<DocumentData> createDemoCorpus() {
+        List<DocumentData> documents = new ArrayList<DocumentData>();
+        documents.add(new DocumentData(
+                "demo-1",
+                "Apple apple fruit tree garden harvest fresh fruit and sweet apple."
+        ));
+        documents.add(new DocumentData(
+                "demo-2",
+                "Car engine wheel road speed vehicle driver and engine power."
+        ));
+        documents.add(new DocumentData(
+                "demo-3",
+                "Apple market fruit price basket fresh market fruit season."
+        ));
+        return documents;
+    }
+
     private static String buildDocumentText(int index) {
         StringBuilder builder = new StringBuilder();
 

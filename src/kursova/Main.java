@@ -12,6 +12,7 @@ import kursova.model.DocumentData;
 import kursova.model.VectorizationResult;
 import kursova.vectorizer.ConsistencyValidator;
 import kursova.vectorizer.ParallelTfidfVectorizer;
+import kursova.vectorizer.PhaseTimingProfiler;
 import kursova.vectorizer.SequentialTfidfVectorizer;
 import kursova.vectorizer.TextVectorizer;
 
@@ -32,7 +33,9 @@ public class Main {
     private static final int CHUNK_STRIDE = 100;
     private static final int BENCHMARK_ITERATIONS = 20;
     private static final int CONSISTENCY_CHECK_LIMIT = 1000;
-    private static final List<Integer> THREAD_COUNTS = Arrays.asList(2, 4, 8);
+    private static final int DEMO_DOCUMENT_LIMIT = 3000;
+    private static final int DEMO_THREAD_COUNT = 8;
+    private static final List<Integer> THREAD_COUNTS = Arrays.asList(2, 4, 6, 8, 12, 16);
     private static final List<Integer> CORPUS_SIZES = Arrays.asList(500, 1000, 2000, 3000, 5000, 10000, 15000, 20000);
 
     public static void main(String[] args) {
@@ -59,7 +62,49 @@ public class Main {
             return;
         }
 
+        if (mode == ExecutionMode.DEMO) {
+            runDemoMode(documents);
+            return;
+        }
+
         runBenchmarkMode(documents);
+    }
+
+    private static void runDemoMode(List<DocumentData> documents) {
+        System.out.println("Demo mode: full comparison of sequential and parallel implementations.");
+        System.out.println("Thread count: " + DEMO_THREAD_COUNT);
+        System.out.println();
+
+        PhaseTimingProfiler profiler = new PhaseTimingProfiler();
+        PhaseTimingProfiler.PhaseProfileResult sequentialProfile = profiler.profileSequential(documents);
+        PhaseTimingProfiler.PhaseProfileResult parallelProfile = profiler.profileParallel(documents, DEMO_THREAD_COUNT);
+
+        VectorizationResult sequentialResult = sequentialProfile.getResult();
+        VectorizationResult parallelResult = parallelProfile.getResult();
+
+        ConsistencyValidator validator = new ConsistencyValidator();
+        boolean consistent = validator.areEqual(sequentialResult, parallelResult);
+
+        System.out.println("Sequential vocabulary size: " + sequentialResult.getVocabulary().size());
+        System.out.println("Parallel vocabulary size:   " + parallelResult.getVocabulary().size());
+        System.out.printf("Sequential total time, ms: %.3f%n", sequentialProfile.getTotalMillis());
+        System.out.printf("Parallel total time, ms:   %.3f%n", parallelProfile.getTotalMillis());
+        System.out.println();
+        System.out.println(
+                consistent
+                        ? "Comparison result: sequential and parallel results match for the full demo corpus."
+                        : "Comparison result: differences were found between sequential and parallel results."
+        );
+        System.out.println();
+
+        printPhaseTable(sequentialProfile, parallelProfile);
+        System.out.println();
+
+        System.out.println("Sequential result preview:");
+        printPreview(sequentialResult);
+        System.out.println();
+        System.out.println("Parallel result preview:");
+        printPreview(parallelResult);
     }
 
     private static void runBenchmarkMode(List<DocumentData> documents) {
@@ -124,8 +169,32 @@ public class Main {
         if (mode == ExecutionMode.PRODUCTION) {
             return loadProductionDocuments(productionOptions);
         }
+        if (mode == ExecutionMode.DEMO) {
+            return loadDemoDocuments();
+        }
 
         return loadBenchmarkDocuments();
+    }
+
+    private static List<DocumentData> loadDemoDocuments() {
+        long start = System.nanoTime();
+        System.out.println("Starting demo corpus loading...");
+        CorpusLoader loader = new CorpusLoader();
+        ensureCorpusSettings();
+        if (countCorpusDocuments() == 0) {
+            importGutenbergCorpusIfAvailable();
+        }
+
+        List<DocumentData> documents = loader.loadFromDirectory(CORPUS_DIRECTORY, DEMO_DOCUMENT_LIMIT);
+        if (!documents.isEmpty()) {
+            System.out.println("Demo documents were loaded from directory: " + CORPUS_DIRECTORY.toAbsolutePath());
+            printElapsed("Demo corpus loading completed", start);
+            return documents;
+        }
+
+        System.out.println("Demo corpus was not found. Falling back to generated documents.");
+        printElapsed("Generated demo corpus loading completed", start);
+        return SampleCorpusFactory.createSyntheticCorpus(DEMO_DOCUMENT_LIMIT);
     }
 
     private static List<DocumentData> loadProductionDocuments(ProductionOptions options) {
@@ -319,5 +388,41 @@ public class Main {
     private static void printElapsed(String label, long startNanos) {
         double elapsedSeconds = (System.nanoTime() - startNanos) / 1_000_000_000.0;
         System.out.printf("%s: %.3f s%n", label, elapsedSeconds);
+    }
+
+    private static double toMillis(long startNanos) {
+        return (System.nanoTime() - startNanos) / 1_000_000.0;
+    }
+
+    private static void printPhaseTable(
+            PhaseTimingProfiler.PhaseProfileResult sequentialProfile,
+            PhaseTimingProfiler.PhaseProfileResult parallelProfile
+    ) {
+        System.out.println("Phase timing comparison:");
+        System.out.printf("%-28s %-18s %-18s %-18s%n",
+                "Phase", "Sequential, ms", "Parallel, ms", "Speedup");
+        System.out.println("-".repeat(82));
+
+        printPhaseRow("Term extraction and DF",
+                sequentialProfile.getExtractionMillis(),
+                parallelProfile.getExtractionMillis());
+        printPhaseRow("IDF computation",
+                sequentialProfile.getIdfMillis(),
+                parallelProfile.getIdfMillis());
+        printPhaseRow("Vector construction",
+                sequentialProfile.getVectorMillis(),
+                parallelProfile.getVectorMillis());
+        printPhaseRow("Total",
+                sequentialProfile.getTotalMillis(),
+                parallelProfile.getTotalMillis());
+    }
+
+    private static void printPhaseRow(String label, double sequentialMillis, double parallelMillis) {
+        double speedup = sequentialMillis / parallelMillis;
+        System.out.printf("%-28s %-18.3f %-18.3f %-18.3f%n",
+                label,
+                sequentialMillis,
+                parallelMillis,
+                speedup);
     }
 }
