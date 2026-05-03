@@ -13,6 +13,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
@@ -73,14 +74,27 @@ public class ResultExporter {
 
     private String buildScaleCsv(CorpusScaleExperimentResult scaleResult) {
         StringBuilder builder = new StringBuilder();
-        builder.append("documents,sequential_millis,best_parallel_millis,best_parallel_mode,speedup").append(System.lineSeparator());
+        List<String> parallelLabels = collectParallelLabels(scaleResult);
+
+        builder.append("documents,sequential_millis");
+        for (String label : parallelLabels) {
+            builder.append(",").append(toCsvColumnName(label));
+        }
+        builder.append(",best_parallel_millis,best_parallel_mode,speedup").append(System.lineSeparator());
 
         for (CorpusScaleMeasurement measurement : scaleResult.getMeasurements()) {
+            builder.append(String.format(Locale.US, "%d,%.3f",
+                    measurement.getDocumentCount(),
+                    measurement.getSequentialAverageMillis()
+            ));
+
+            for (String label : parallelLabels) {
+                builder.append(String.format(Locale.US, ",%.3f", measurement.getParallelAverageMillis(label)));
+            }
+
             builder.append(String.format(
                     Locale.US,
-                    "%d,%.3f,%.3f,\"%s\",%.3f%n",
-                    measurement.getDocumentCount(),
-                    measurement.getSequentialAverageMillis(),
+                    ",%.3f,\"%s\",%.3f%n",
                     measurement.getBestParallelAverageMillis(),
                     measurement.getBestParallelLabel(),
                     measurement.getBestSpeedup()
@@ -133,5 +147,27 @@ public class ResultExporter {
         } catch (IOException exception) {
             throw new IllegalStateException("Failed to write result file: " + path, exception);
         }
+    }
+
+    private List<String> collectParallelLabels(CorpusScaleExperimentResult scaleResult) {
+        if (scaleResult.getMeasurements().isEmpty()) {
+            return List.of();
+        }
+
+        List<String> labels = new java.util.ArrayList<String>();
+        for (ParallelMeasurement measurement : scaleResult.getMeasurements().get(0).getParallelMeasurements()) {
+            labels.add(measurement.getLabel());
+        }
+
+        return labels;
+    }
+
+    private String toCsvColumnName(String label) {
+        return label.toLowerCase(Locale.US)
+                .replace(" ", "_")
+                .replace("(", "")
+                .replace(")", "")
+                .replace("-", "_")
+                + "_millis";
     }
 }

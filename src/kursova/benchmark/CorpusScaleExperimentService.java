@@ -46,6 +46,7 @@ public class CorpusScaleExperimentService {
             measurements.add(new CorpusScaleMeasurement(
                     actualSize,
                     benchmarkResult.getSequentialAverageMillis(),
+                    benchmarkResult.getParallelMeasurements(),
                     bestParallel.getAverageMillis(),
                     bestParallel.getLabel(),
                     bestParallel.getSpeedup()

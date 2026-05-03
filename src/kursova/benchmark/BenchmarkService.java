@@ -24,44 +24,33 @@ public class BenchmarkService {
 
     public BenchmarkResult run() {
         BenchmarkTfidfProcessor processor = new BenchmarkTfidfProcessor();
-        List<ParallelMeasurement> measurements = new ArrayList<ParallelMeasurement>();
 
+        performWarmup(() -> processor.processSequential(documents), SEQUENTIAL_WARMUP_RUNS);
+
+        List<ParallelMeasurement> measurements = new ArrayList<>();
         for (Integer threadCount : threadCounts) {
-            final int currentThreadCount = threadCount.intValue();
-            double averageMillis = measureAverageMillis(new DoubleSupplier() {
-                @Override
-                public double getAsDouble() {
-                    return processor.processParallel(documents, currentThreadCount);
-                }
-            }, iterations);
+            final int currentThreadCount = threadCount;
+            double averageMillis = measureAverageMillis(
+                    () -> processor.processParallel(documents, currentThreadCount),
+                    iterations
+            );
             measurements.add(new ParallelMeasurement(
                     "Паралельний (" + threadCount + ")",
-                    averageMillis,
-                    0.0,
-                    0.0
+                    averageMillis, 0.0, 0.0
             ));
         }
 
-        performWarmup(new DoubleSupplier() {
-            @Override
-            public double getAsDouble() {
-                return processor.processSequential(documents);
-            }
-        }, SEQUENTIAL_WARMUP_RUNS);
-        double sequentialAverage = measureAverageMillis(new DoubleSupplier() {
-            @Override
-            public double getAsDouble() {
-                return processor.processSequential(documents);
-            }
-        }, iterations);
+        double sequentialAverage = measureAverageMillis(
+                () -> processor.processSequential(documents),
+                iterations
+        );
 
-        List<ParallelMeasurement> finalizedMeasurements = new ArrayList<ParallelMeasurement>(measurements.size());
+        List<ParallelMeasurement> finalizedMeasurements = new ArrayList<>(measurements.size());
         for (int i = 0; i < measurements.size(); i++) {
             ParallelMeasurement measurement = measurements.get(i);
-            int threadCount = threadCounts.get(i).intValue();
+            int threadCount = threadCounts.get(i);
             double speedup = sequentialAverage / measurement.getAverageMillis();
             double efficiency = speedup / threadCount;
-
             finalizedMeasurements.add(new ParallelMeasurement(
                     measurement.getLabel(),
                     measurement.getAverageMillis(),
@@ -70,12 +59,7 @@ public class BenchmarkService {
             ));
         }
 
-        return new BenchmarkResult(
-                sequentialAverage,
-                iterations,
-                SEQUENTIAL_WARMUP_RUNS,
-                finalizedMeasurements
-        );
+        return new BenchmarkResult(sequentialAverage, iterations, SEQUENTIAL_WARMUP_RUNS, finalizedMeasurements);
     }
 
     private double measureAverageMillis(DoubleSupplier computation, int attempts) {
