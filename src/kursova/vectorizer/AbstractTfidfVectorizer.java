@@ -22,7 +22,7 @@ abstract class AbstractTfidfVectorizer implements TextVectorizer {
 
     protected DocumentTerms extractTerms(DocumentData document) {
         List<String> tokens = preprocessor.tokenize(document.getText());
-        Map<String, Integer> termCounts = new HashMap<String, Integer>();
+        Map<String, Integer> termCounts = new HashMap<String, Integer>(calculateHashCapacity(tokens.size()));
 
         for (String token : tokens) {
             termCounts.merge(token, 1, Integer::sum);
@@ -32,7 +32,7 @@ abstract class AbstractTfidfVectorizer implements TextVectorizer {
     }
 
     protected Map<String, Double> computeIdf(Map<String, Integer> documentFrequency, int documentCount) {
-        Map<String, Double> idf = new HashMap<String, Double>();
+        Map<String, Double> idf = new HashMap<String, Double>(calculateHashCapacity(documentFrequency.size()));
 
         for (Map.Entry<String, Integer> entry : documentFrequency.entrySet()) {
             double value = Math.log((1.0 + documentCount) / (1.0 + entry.getValue())) + 1.0;
@@ -43,7 +43,9 @@ abstract class AbstractTfidfVectorizer implements TextVectorizer {
     }
 
     protected Map<String, Double> buildDocumentVector(DocumentTerms documentTerms, Map<String, Double> idf) {
-        Map<String, Double> vector = new HashMap<String, Double>();
+        Map<String, Double> vector = new HashMap<String, Double>(
+                calculateHashCapacity(documentTerms.getTermCounts().size())
+        );
 
         if (documentTerms.getTotalTerms() == 0) {
             return vector;
@@ -67,11 +69,17 @@ abstract class AbstractTfidfVectorizer implements TextVectorizer {
         List<String> vocabulary = new ArrayList<String>(documentFrequency.keySet());
         Collections.sort(vocabulary);
 
-        Map<String, Map<String, Double>> orderedVectors = new LinkedHashMap<String, Map<String, Double>>();
+        Map<String, Map<String, Double>> orderedVectors = new LinkedHashMap<String, Map<String, Double>>(
+                calculateHashCapacity(documentTerms.size())
+        );
         for (DocumentTerms terms : documentTerms) {
             orderedVectors.put(terms.getDocumentId(), vectors.getOrDefault(terms.getDocumentId(), Map.of()));
         }
 
         return new VectorizationResult(vocabulary, orderedVectors, idf);
+    }
+
+    protected int calculateHashCapacity(int expectedSize) {
+        return Math.max(16, (int) (expectedSize / 0.75f) + 1);
     }
 }

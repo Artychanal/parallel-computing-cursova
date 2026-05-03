@@ -6,10 +6,8 @@ import kursova.model.VectorizationResult;
 
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -27,15 +25,15 @@ public class ParallelTfidfVectorizer extends AbstractTfidfVectorizer implements 
 
     @Override
     public VectorizationResult vectorize(List<DocumentData> documents) {
-        List<Future<PartialTermsResult>> extractionFutures = submitExtractionTasks(documents, executor);
+        List<Future<PartialTermsResult>> extractionFutures = submitExtractionTasks(documents);
         PartialTermsResult extractionResult = mergeExtractionResults(extractionFutures);
 
         List<DocumentTerms> documentTerms = extractionResult.getDocumentTerms();
         Map<String, Integer> documentFrequency = extractionResult.getDocumentFrequency();
         Map<String, Double> idf = computeIdf(documentFrequency, documents.size());
 
-        List<Future<PartialVectorResult>> vectorFutures = submitVectorTasks(documentTerms, idf, executor);
-        Map<String, Map<String, Double>> vectors = mergeVectorResults(vectorFutures);
+        List<Future<PartialVectorResult>> vectorFutures = submitVectorTasks(documentTerms, idf);
+        Map<String, Map<String, Double>> vectors = mergeVectorResults(vectorFutures, documentTerms.size());
         return buildResult(documentTerms, documentFrequency, idf, vectors);
     }
 
@@ -44,31 +42,25 @@ public class ParallelTfidfVectorizer extends AbstractTfidfVectorizer implements 
         executor.shutdown();
     }
 
-    private List<Future<PartialTermsResult>> submitExtractionTasks(
-            List<DocumentData> documents,
-            ExecutorService executor
-    ) {
+    private List<Future<PartialTermsResult>> submitExtractionTasks(List<DocumentData> documents) {
         List<List<DocumentData>> partitions = partition(documents, threadCount);
         List<Future<PartialTermsResult>> futures = new ArrayList<Future<PartialTermsResult>>(partitions.size());
 
         for (List<DocumentData> partition : partitions) {
-            futures.add(executor.submit(new Callable<PartialTermsResult>() {
-                @Override
-                public PartialTermsResult call() {
-                    List<DocumentTerms> partialTerms = new ArrayList<DocumentTerms>(partition.size());
-                    Map<String, Integer> localFrequency = new HashMap<String, Integer>();
+            futures.add(executor.submit(() -> {
+                List<DocumentTerms> partialTerms = new ArrayList<DocumentTerms>(partition.size());
+                Map<String, Integer> localFrequency = new HashMap<String, Integer>(calculateHashCapacity(partition.size()));
 
-                    for (DocumentData document : partition) {
-                        DocumentTerms terms = extractTerms(document);
-                        partialTerms.add(terms);
+                for (DocumentData document : partition) {
+                    DocumentTerms terms = extractTerms(document);
+                    partialTerms.add(terms);
 
-                        for (String uniqueTerm : terms.getUniqueTerms()) {
-                            localFrequency.merge(uniqueTerm, 1, Integer::sum);
-                        }
+                    for (String uniqueTerm : terms.getUniqueTerms()) {
+                        localFrequency.merge(uniqueTerm, 1, Integer::sum);
                     }
-
-                    return new PartialTermsResult(partialTerms, localFrequency);
                 }
+
+                return new PartialTermsResult(partialTerms, localFrequency);
             }));
         }
 
@@ -76,11 +68,19 @@ public class ParallelTfidfVectorizer extends AbstractTfidfVectorizer implements 
     }
 
     private PartialTermsResult mergeExtractionResults(List<Future<PartialTermsResult>> futures) {
-        List<DocumentTerms> documentTerms = new ArrayList<DocumentTerms>();
-        Map<String, Integer> documentFrequency = new HashMap<String, Integer>();
+        List<PartialTermsResult> partialResults = new ArrayList<PartialTermsResult>(futures.size());
+        int totalDocuments = 0;
 
         for (Future<PartialTermsResult> future : futures) {
             PartialTermsResult partialResult = getFutureValue(future);
+            partialResults.add(partialResult);
+            totalDocuments += partialResult.getDocumentTerms().size();
+        }
+
+        List<DocumentTerms> documentTerms = new ArrayList<DocumentTerms>(totalDocuments);
+        Map<String, Integer> documentFrequency = new HashMap<String, Integer>(calculateHashCapacity(totalDocuments));
+
+        for (PartialTermsResult partialResult : partialResults) {
             documentTerms.addAll(partialResult.getDocumentTerms());
 
             for (Map.Entry<String, Integer> entry : partialResult.getDocumentFrequency().entrySet()) {
@@ -91,34 +91,34 @@ public class ParallelTfidfVectorizer extends AbstractTfidfVectorizer implements 
         return new PartialTermsResult(documentTerms, documentFrequency);
     }
 
-    private List<Future<PartialVectorResult>> submitVectorTasks(
-            List<DocumentTerms> documentTerms,
-            Map<String, Double> idf,
-            ExecutorService executor
-    ) {
+    private List<Future<PartialVectorResult>> submitVectorTasks(List<DocumentTerms> documentTerms, Map<String, Double> idf) {
         List<List<DocumentTerms>> partitions = partition(documentTerms, threadCount);
         List<Future<PartialVectorResult>> futures = new ArrayList<Future<PartialVectorResult>>(partitions.size());
 
         for (List<DocumentTerms> partition : partitions) {
-            futures.add(executor.submit(new Callable<PartialVectorResult>() {
-                @Override
-                public PartialVectorResult call() {
-                    Map<String, Map<String, Double>> partialVectors = new LinkedHashMap<String, Map<String, Double>>();
+            futures.add(executor.submit(() -> {
+                Map<String, Map<String, Double>> partialVectors = new HashMap<String, Map<String, Double>>(
+                        calculateHashCapacity(partition.size())
+                );
 
-                    for (DocumentTerms terms : partition) {
-                        partialVectors.put(terms.getDocumentId(), buildDocumentVector(terms, idf));
-                    }
-
-                    return new PartialVectorResult(partialVectors);
+                for (DocumentTerms terms : partition) {
+                    partialVectors.put(terms.getDocumentId(), buildDocumentVector(terms, idf));
                 }
+
+                return new PartialVectorResult(partialVectors);
             }));
         }
 
         return futures;
     }
 
-    private Map<String, Map<String, Double>> mergeVectorResults(List<Future<PartialVectorResult>> futures) {
-        Map<String, Map<String, Double>> vectors = new LinkedHashMap<String, Map<String, Double>>();
+    private Map<String, Map<String, Double>> mergeVectorResults(
+            List<Future<PartialVectorResult>> futures,
+            int expectedSize
+    ) {
+        Map<String, Map<String, Double>> vectors = new HashMap<String, Map<String, Double>>(
+                calculateHashCapacity(expectedSize)
+        );
 
         for (Future<PartialVectorResult> future : futures) {
             PartialVectorResult partialResult = getFutureValue(future);

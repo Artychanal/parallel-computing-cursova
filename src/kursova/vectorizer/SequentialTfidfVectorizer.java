@@ -6,7 +6,6 @@ import kursova.model.VectorizationResult;
 
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -15,7 +14,7 @@ public class SequentialTfidfVectorizer extends AbstractTfidfVectorizer {
     @Override
     public VectorizationResult vectorize(List<DocumentData> documents) {
         List<DocumentTerms> documentTerms = new ArrayList<DocumentTerms>(documents.size());
-        Map<String, Integer> documentFrequency = new HashMap<String, Integer>();
+        Map<String, Integer> documentFrequency = new HashMap<String, Integer>(calculateHashCapacity(documents.size()));
 
         for (DocumentData document : documents) {
             DocumentTerms terms = extractTerms(document);
@@ -27,7 +26,9 @@ public class SequentialTfidfVectorizer extends AbstractTfidfVectorizer {
         }
 
         Map<String, Double> idf = computeIdf(documentFrequency, documents.size());
-        Map<String, Map<String, Double>> vectors = new LinkedHashMap<String, Map<String, Double>>();
+        Map<String, Map<String, Double>> vectors = new HashMap<String, Map<String, Double>>(
+                calculateHashCapacity(documentTerms.size())
+        );
 
         for (DocumentTerms terms : documentTerms) {
             vectors.put(terms.getDocumentId(), buildDocumentVector(terms, idf));
