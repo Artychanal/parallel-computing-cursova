@@ -28,12 +28,12 @@ public class Main {
 
     private static final Path CORPUS_DIRECTORY = Path.of("data", "corpus_fulltext");
     private static final Path GUTENBERG_SOURCE_DIRECTORY = Path.of("data", "source", "gutenberg");
-    private static final int IMPORT_DOCUMENT_LIMIT = 60000;
+    private static final int IMPORT_DOCUMENT_LIMIT = 100000;
     private static final int CHUNK_WORD_COUNT = 2000;
-    private static final int CHUNK_STRIDE = 100;
+    private static final int CHUNK_STRIDE = CHUNK_WORD_COUNT;
     private static final int BENCHMARK_ITERATIONS = 20;
     private static final int CONSISTENCY_CHECK_LIMIT = 1000;
-    private static final int DEMO_DOCUMENT_LIMIT = 3000;
+    private static final int DEMO_DOCUMENT_LIMIT = 15000;
     private static final int DEMO_THREAD_COUNT = 8;
     private static final List<Integer> THREAD_COUNTS = Arrays.asList(2, 4, 6, 8, 12, 16);
     private static final List<Integer> CORPUS_SIZES = Arrays.asList(500, 1000, 2000, 3000, 5000, 10000, 15000, 20000);
@@ -111,6 +111,7 @@ public class Main {
         TextVectorizer sequentialVectorizer = new SequentialTfidfVectorizer();
         VectorizationResult sequentialResult = sequentialVectorizer.vectorize(documents);
         printPreview(sequentialResult);
+        sequentialResult = null;
         validateConsistency(documents);
 
         BenchmarkService benchmarkService = new BenchmarkService(documents, THREAD_COUNTS, BENCHMARK_ITERATIONS);

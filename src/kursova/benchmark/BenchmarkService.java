@@ -1,16 +1,17 @@
 package kursova.benchmark;
 
 import kursova.model.DocumentData;
-import kursova.vectorizer.BenchmarkTfidfProcessor;
+import kursova.vectorizer.ParallelTfidfVectorizer;
+import kursova.vectorizer.SequentialTfidfVectorizer;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.function.DoubleSupplier;
+import java.util.function.LongSupplier;
 
 public class BenchmarkService {
 
-    private static final int SEQUENTIAL_WARMUP_RUNS = 1;
-    private static volatile double blackhole;
+    private static final int WARMUP_RUNS = 3;
+    private static volatile long blackhole;
 
     private final List<DocumentData> documents;
     private final List<Integer> threadCounts;
@@ -23,29 +24,35 @@ public class BenchmarkService {
     }
 
     public BenchmarkResult run() {
-        BenchmarkTfidfProcessor processor = new BenchmarkTfidfProcessor();
+        SequentialTfidfVectorizer sequential = new SequentialTfidfVectorizer();
 
-        performWarmup(() -> processor.processSequential(documents), SEQUENTIAL_WARMUP_RUNS);
+        performWarmup(() -> sequential.vectorize(documents).getDocumentVectors().size(), WARMUP_RUNS);
 
         List<ParallelMeasurement> measurements = new ArrayList<>();
+
         for (Integer threadCount : threadCounts) {
-            final int currentThreadCount = threadCount;
-            double averageMillis = measureAverageMillis(
-                    () -> processor.processParallel(documents, currentThreadCount),
-                    iterations
-            );
-            measurements.add(new ParallelMeasurement(
-                    "Паралельний (" + threadCount + ")",
-                    averageMillis, 0.0, 0.0
-            ));
+            try (ParallelTfidfVectorizer parallel = new ParallelTfidfVectorizer(threadCount)) {
+                performWarmup(() -> parallel.vectorize(documents).getDocumentVectors().size(), WARMUP_RUNS);
+
+                double averageMillis = measureAverageMillis(
+                        () -> parallel.vectorize(documents).getDocumentVectors().size(),
+                        iterations
+                );
+
+                measurements.add(new ParallelMeasurement(
+                        "Паралельний (" + threadCount + ")",
+                        averageMillis, 0.0, 0.0
+                ));
+            }
         }
 
         double sequentialAverage = measureAverageMillis(
-                () -> processor.processSequential(documents),
+                () -> sequential.vectorize(documents).getDocumentVectors().size(),
                 iterations
         );
 
         List<ParallelMeasurement> finalizedMeasurements = new ArrayList<>(measurements.size());
+
         for (int i = 0; i < measurements.size(); i++) {
             ParallelMeasurement measurement = measurements.get(i);
             int threadCount = threadCounts.get(i);
@@ -59,26 +66,25 @@ public class BenchmarkService {
             ));
         }
 
-        return new BenchmarkResult(sequentialAverage, iterations, SEQUENTIAL_WARMUP_RUNS, finalizedMeasurements);
+        return new BenchmarkResult(sequentialAverage, iterations, WARMUP_RUNS, finalizedMeasurements);
     }
 
-    private double measureAverageMillis(DoubleSupplier computation, int attempts) {
+    private double measureAverageMillis(LongSupplier computation, int attempts) {
         long totalNanos = 0L;
 
         for (int i = 0; i < attempts; i++) {
             long start = System.nanoTime();
-            blackhole = computation.getAsDouble();
+            blackhole = computation.getAsLong();
             long finish = System.nanoTime();
             totalNanos += (finish - start);
         }
 
-        double averageNanos = (double) totalNanos / attempts;
-        return averageNanos / 1_000_000.0;
+        return (totalNanos / (double) attempts) / 1_000_000.0;
     }
 
-    private void performWarmup(DoubleSupplier computation, int warmupRuns) {
+    private void performWarmup(LongSupplier computation, int warmupRuns) {
         for (int i = 0; i < warmupRuns; i++) {
-            blackhole = computation.getAsDouble();
+            blackhole = computation.getAsLong();
         }
     }
 }
