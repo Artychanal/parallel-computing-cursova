@@ -1,6 +1,7 @@
 package kursova;
 
 import kursova.benchmark.BenchmarkResult;
+import kursova.benchmark.BenchmarkScenarioResult;
 import kursova.benchmark.BenchmarkService;
 import kursova.benchmark.CorpusScaleExperimentResult;
 import kursova.benchmark.CorpusScaleExperimentService;
@@ -11,6 +12,7 @@ import kursova.io.SampleCorpusFactory;
 import kursova.model.DocumentData;
 import kursova.model.VectorizationResult;
 import kursova.vectorizer.ConsistencyValidator;
+import kursova.vectorizer.FixedThreadPoolTfidfVectorizer;
 import kursova.vectorizer.ParallelTfidfVectorizer;
 import kursova.vectorizer.PhaseTimingProfiler;
 import kursova.vectorizer.SequentialTfidfVectorizer;
@@ -19,9 +21,12 @@ import kursova.vectorizer.TextVectorizer;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Locale;
+import java.util.function.LongSupplier;
 import java.util.stream.Stream;
 
 public class Main {
@@ -32,11 +37,19 @@ public class Main {
     private static final int CHUNK_WORD_COUNT = 2000;
     private static final int CHUNK_STRIDE = CHUNK_WORD_COUNT;
     private static final int BENCHMARK_ITERATIONS = 20;
+    private static final int QUICK_BENCHMARK_ITERATIONS = 5;
+    private static final int BENCHMARK_WARMUP_RUNS = 3;
     private static final int CONSISTENCY_CHECK_LIMIT = 1000;
+    private static final int BENCHMARK_SCENARIO_DOCUMENT_LIMIT = 15000;
+    private static final int QUICK_BENCHMARK_SCENARIO_DOCUMENT_LIMIT = 5000;
+    private static final int QUICK_CONFIGURATION_STUDY_DOCUMENT_LIMIT = 15000;
+    private static final int QUICK_CONFIGURATION_STUDY_THREADS = 12;
+    private static final List<Integer> QUICK_TASKS_PER_WORKER_OPTIONS = Arrays.asList(1, 2, 4, 8, 16);
     private static final int DEMO_DOCUMENT_LIMIT = 15000;
     private static final int DEMO_THREAD_COUNT = 8;
     private static final List<Integer> THREAD_COUNTS = Arrays.asList(2, 4, 6, 8, 12, 16);
     private static final List<Integer> CORPUS_SIZES = Arrays.asList(500, 1000, 2000, 3000, 5000, 10000, 15000, 20000);
+    private static final List<Integer> QUICK_CORPUS_SIZES = Arrays.asList(500, 2000, 5000, 10000);
 
     public static void main(String[] args) {
         ExecutionMode mode = ExecutionMode.fromArgs(args);
@@ -67,7 +80,7 @@ public class Main {
             return;
         }
 
-        runBenchmarkMode(documents);
+        runBenchmarkMode(documents, mode == ExecutionMode.QUICK_BENCHMARK);
     }
 
     private static void runDemoMode(List<DocumentData> documents) {
@@ -107,26 +120,42 @@ public class Main {
         printPreview(parallelResult);
     }
 
-    private static void runBenchmarkMode(List<DocumentData> documents) {
+    private static void runBenchmarkMode(List<DocumentData> documents, boolean quickMode) {
+        int iterations = quickMode ? QUICK_BENCHMARK_ITERATIONS : BENCHMARK_ITERATIONS;
+        int scenarioDocumentLimit = quickMode
+                ? QUICK_BENCHMARK_SCENARIO_DOCUMENT_LIMIT
+                : BENCHMARK_SCENARIO_DOCUMENT_LIMIT;
+        List<Integer> corpusSizes = quickMode ? QUICK_CORPUS_SIZES : CORPUS_SIZES;
+
+        System.out.println(quickMode
+                ? "Quick benchmark mode: reduced experiment set for faster feedback."
+                : "Full benchmark mode: running complete experiment set.");
+        System.out.println("Iterations per measurement: " + iterations);
+        System.out.println();
+
         TextVectorizer sequentialVectorizer = new SequentialTfidfVectorizer();
         VectorizationResult sequentialResult = sequentialVectorizer.vectorize(documents);
         printPreview(sequentialResult);
-        sequentialResult = null;
         validateConsistency(documents);
 
-        BenchmarkService benchmarkService = new BenchmarkService(documents, THREAD_COUNTS, BENCHMARK_ITERATIONS);
+        BenchmarkService benchmarkService = new BenchmarkService(documents, THREAD_COUNTS, iterations);
         BenchmarkResult benchmarkResult = benchmarkService.run();
         CorpusScaleExperimentService scaleExperimentService = new CorpusScaleExperimentService(
                 documents,
-                CORPUS_SIZES,
+                corpusSizes,
                 THREAD_COUNTS,
-                BENCHMARK_ITERATIONS
+                iterations
         );
         CorpusScaleExperimentResult scaleExperimentResult = scaleExperimentService.run();
+        List<BenchmarkScenarioResult> scenarioResults = runScenarioBenchmarks(documents, scenarioDocumentLimit, iterations);
+        String poolConfigurationStudy = quickMode ? buildQuickPoolConfigurationStudies(documents, iterations) : null;
 
         ResultExporter exporter = new ResultExporter();
-        Path outputDirectory = exporter.createRunDirectory("benchmark");
-        exporter.exportBenchmarkResults(outputDirectory, benchmarkResult, scaleExperimentResult);
+        Path outputDirectory = exporter.createRunDirectory(quickMode ? "quick_benchmark" : "benchmark");
+        exporter.exportBenchmarkResults(outputDirectory, benchmarkResult, scaleExperimentResult, scenarioResults);
+        if (poolConfigurationStudy != null) {
+            exporter.exportAdditionalText(outputDirectory, "pool_configuration_study.txt", poolConfigurationStudy);
+        }
 
         System.out.println();
         System.out.println("Performance benchmark results:");
@@ -135,7 +164,228 @@ public class Main {
         System.out.println("Scalability by corpus size:");
         System.out.println(scaleExperimentResult.toTable());
         System.out.println();
+        printScenarioBenchmarks(scenarioResults, scenarioDocumentLimit);
+        if (poolConfigurationStudy != null) {
+            System.out.println();
+            System.out.println(poolConfigurationStudy);
+        }
+        System.out.println();
         System.out.println("Benchmark results were saved to: " + outputDirectory.toAbsolutePath());
+    }
+
+    private static List<BenchmarkScenarioResult> runScenarioBenchmarks(
+            List<DocumentData> documents,
+            int scenarioDocumentLimit,
+            int iterations
+    ) {
+        int scenarioSize = Math.min(scenarioDocumentLimit, documents.size());
+        List<BenchmarkScenarioResult> results = new java.util.ArrayList<>();
+
+        List<DocumentData> equalLengthDocuments = SampleCorpusFactory.createEqualLengthBenchmarkCorpus(documents, scenarioSize);
+        results.add(new BenchmarkScenarioResult(
+                "Рівні документи",
+                equalLengthDocuments.size(),
+                new BenchmarkService(equalLengthDocuments, THREAD_COUNTS, iterations).run()
+        ));
+
+        List<DocumentData> randomLengthDocuments = SampleCorpusFactory.createRandomLengthBenchmarkCorpus(documents, scenarioSize);
+        results.add(new BenchmarkScenarioResult(
+                "Випадкові розміри документів",
+                randomLengthDocuments.size(),
+                new BenchmarkService(randomLengthDocuments, THREAD_COUNTS, iterations).run()
+        ));
+
+        List<DocumentData> highVarianceDocuments = SampleCorpusFactory.createHighVarianceBenchmarkCorpus(documents, scenarioSize);
+        results.add(new BenchmarkScenarioResult(
+                "Сильна нерівномірність розмірів",
+                highVarianceDocuments.size(),
+                new BenchmarkService(highVarianceDocuments, THREAD_COUNTS, iterations).run()
+        ));
+
+        return results;
+    }
+
+    private static void printScenarioBenchmarks(List<BenchmarkScenarioResult> scenarioResults, int scenarioDocumentLimit) {
+        System.out.println("Benchmark scenarios with " + scenarioDocumentLimit + " documents:");
+
+        for (BenchmarkScenarioResult scenarioResult : scenarioResults) {
+            System.out.println();
+            System.out.println("Scenario: " + scenarioResult.getScenarioLabel()
+                    + " (" + scenarioResult.getDocumentCount() + " documents)");
+            System.out.println(scenarioResult.getBenchmarkResult().toTable());
+        }
+    }
+
+    private static String buildQuickPoolConfigurationStudies(List<DocumentData> documents, int iterations) {
+        StringBuilder builder = new StringBuilder();
+        builder.append(buildQuickPoolConfigurationStudy(
+                documents.subList(0, Math.min(QUICK_CONFIGURATION_STUDY_DOCUMENT_LIMIT, documents.size())),
+                QUICK_CONFIGURATION_STUDY_DOCUMENT_LIMIT,
+                "Рівномірний корпус",
+                iterations
+        ));
+        builder.append(System.lineSeparator());
+
+        List<DocumentData> highVarianceDocuments = SampleCorpusFactory.createHighVarianceBenchmarkCorpus(
+                documents,
+                Math.min(QUICK_CONFIGURATION_STUDY_DOCUMENT_LIMIT, documents.size())
+        );
+        builder.append(buildQuickPoolConfigurationStudy(
+                highVarianceDocuments,
+                QUICK_CONFIGURATION_STUDY_DOCUMENT_LIMIT,
+                "Сильно нерівномірний корпус",
+                iterations
+        ));
+
+        return builder.toString();
+    }
+
+    private static String buildQuickPoolConfigurationStudy(
+            List<DocumentData> documents,
+            int requestedDocumentLimit,
+            String studyLabel,
+            int iterations
+    ) {
+        int studySize = Math.min(QUICK_CONFIGURATION_STUDY_DOCUMENT_LIMIT, documents.size());
+        List<PoolConfigurationMeasurement> measurements = new ArrayList<>();
+
+        SequentialTfidfVectorizer sequential = new SequentialTfidfVectorizer();
+        performWarmup(() -> sequential.vectorize(documents).getDocumentVectors().size(), BENCHMARK_WARMUP_RUNS);
+        double sequentialAverage = measureAverageMillis(
+                () -> sequential.vectorize(documents).getDocumentVectors().size(),
+                iterations
+        );
+
+        measurePoolConfigurationSeries(documents, iterations, sequentialAverage, measurements, true);
+        measurePoolConfigurationSeries(documents, iterations, sequentialAverage, measurements, false);
+
+        return formatPoolConfigurationStudy(
+                studySize,
+                requestedDocumentLimit,
+                studyLabel,
+                sequentialAverage,
+                measurements,
+                iterations
+        );
+    }
+
+    private static String formatPoolConfigurationStudy(
+            int studySize,
+            int requestedDocumentLimit,
+            String studyLabel,
+            double sequentialAverage,
+            List<PoolConfigurationMeasurement> measurements,
+            int iterations
+    ) {
+        StringBuilder builder = new StringBuilder();
+        builder.append("Pool and task-count study: ")
+                .append(studyLabel)
+                .append(System.lineSeparator());
+        builder.append("Documents: ")
+                .append(studySize)
+                .append(" of requested ")
+                .append(requestedDocumentLimit)
+                .append(" documents")
+                .append(System.lineSeparator());
+        builder.append(String.format(
+                Locale.US,
+                "Threads: %d, warmup runs: %d, measurements: %d, sequential: %.3f ms%n",
+                QUICK_CONFIGURATION_STUDY_THREADS,
+                BENCHMARK_WARMUP_RUNS,
+                iterations,
+                sequentialAverage
+        ));
+        builder.append(String.format(
+                Locale.US,
+                "%-18s %-18s %-18s %-18s %-18s%n",
+                "Pool",
+                "Tasks/worker",
+                "Total tasks",
+                "Average ms",
+                "Speedup"
+        ));
+        builder.append("-".repeat(92)).append(System.lineSeparator());
+
+        for (PoolConfigurationMeasurement measurement : measurements) {
+            builder.append(String.format(
+                    Locale.US,
+                    "%-18s %-18d %-18d %-18.3f %-18.3f%n",
+                    measurement.getPoolLabel(),
+                    measurement.getTasksPerWorker(),
+                    measurement.getTotalTaskCount(),
+                    measurement.getAverageMillis(),
+                    measurement.getSpeedup()
+            ));
+        }
+
+        return builder.toString();
+    }
+
+    private static void measurePoolConfigurationSeries(
+            List<DocumentData> documents,
+            int iterations,
+            double sequentialAverage,
+            List<PoolConfigurationMeasurement> measurements,
+            boolean fixedPool
+    ) {
+        for (int tasksPerWorker : QUICK_TASKS_PER_WORKER_OPTIONS) {
+            if (fixedPool) {
+                try (FixedThreadPoolTfidfVectorizer vectorizer = new FixedThreadPoolTfidfVectorizer(
+                        QUICK_CONFIGURATION_STUDY_THREADS,
+                        tasksPerWorker
+                )) {
+                    performWarmup(() -> vectorizer.vectorize(documents).getDocumentVectors().size(), BENCHMARK_WARMUP_RUNS);
+                    double averageMillis = measureAverageMillis(
+                            () -> vectorizer.vectorize(documents).getDocumentVectors().size(),
+                            iterations
+                    );
+                    measurements.add(new PoolConfigurationMeasurement(
+                            "FixedThreadPool",
+                            tasksPerWorker,
+                            QUICK_CONFIGURATION_STUDY_THREADS * tasksPerWorker,
+                            averageMillis,
+                            sequentialAverage / averageMillis
+                    ));
+                }
+            } else {
+                try (ParallelTfidfVectorizer vectorizer = new ParallelTfidfVectorizer(
+                        QUICK_CONFIGURATION_STUDY_THREADS,
+                        tasksPerWorker
+                )) {
+                    performWarmup(() -> vectorizer.vectorize(documents).getDocumentVectors().size(), BENCHMARK_WARMUP_RUNS);
+                    double averageMillis = measureAverageMillis(
+                            () -> vectorizer.vectorize(documents).getDocumentVectors().size(),
+                            iterations
+                    );
+                    measurements.add(new PoolConfigurationMeasurement(
+                            "WorkStealingPool",
+                            tasksPerWorker,
+                            QUICK_CONFIGURATION_STUDY_THREADS * tasksPerWorker,
+                            averageMillis,
+                            sequentialAverage / averageMillis
+                    ));
+                }
+            }
+        }
+    }
+
+    private static double measureAverageMillis(LongSupplier computation, int attempts) {
+        long totalNanos = 0L;
+
+        for (int attempt = 0; attempt < attempts; attempt++) {
+            long start = System.nanoTime();
+            computation.getAsLong();
+            long finish = System.nanoTime();
+            totalNanos += finish - start;
+        }
+
+        return (totalNanos / (double) attempts) / 1_000_000.0;
+    }
+
+    private static void performWarmup(LongSupplier computation, int warmupRuns) {
+        for (int run = 0; run < warmupRuns; run++) {
+            computation.getAsLong();
+        }
     }
 
     private static void runProductionMode(List<DocumentData> documents, ProductionOptions options) {
@@ -256,7 +506,7 @@ public class Main {
     }
 
     private static void ensureCorpusCapacity() {
-        int requiredDocuments = CORPUS_SIZES.get(CORPUS_SIZES.size() - 1).intValue();
+        int requiredDocuments = CORPUS_SIZES.get(CORPUS_SIZES.size() - 1);
         ensureCorpusSettings();
         int currentDocuments = countCorpusDocuments();
 
@@ -391,10 +641,6 @@ public class Main {
         System.out.printf("%s: %.3f s%n", label, elapsedSeconds);
     }
 
-    private static double toMillis(long startNanos) {
-        return (System.nanoTime() - startNanos) / 1_000_000.0;
-    }
-
     private static void printPhaseTable(
             PhaseTimingProfiler.PhaseProfileResult sequentialProfile,
             PhaseTimingProfiler.PhaseProfileResult parallelProfile
@@ -425,5 +671,48 @@ public class Main {
                 sequentialMillis,
                 parallelMillis,
                 speedup);
+    }
+
+    private static class PoolConfigurationMeasurement {
+
+        private final String poolLabel;
+        private final int tasksPerWorker;
+        private final int totalTaskCount;
+        private final double averageMillis;
+        private final double speedup;
+
+        private PoolConfigurationMeasurement(
+                String poolLabel,
+                int tasksPerWorker,
+                int totalTaskCount,
+                double averageMillis,
+                double speedup
+        ) {
+            this.poolLabel = poolLabel;
+            this.tasksPerWorker = tasksPerWorker;
+            this.totalTaskCount = totalTaskCount;
+            this.averageMillis = averageMillis;
+            this.speedup = speedup;
+        }
+
+        private String getPoolLabel() {
+            return poolLabel;
+        }
+
+        private int getTasksPerWorker() {
+            return tasksPerWorker;
+        }
+
+        private int getTotalTaskCount() {
+            return totalTaskCount;
+        }
+
+        private double getAverageMillis() {
+            return averageMillis;
+        }
+
+        private double getSpeedup() {
+            return speedup;
+        }
     }
 }

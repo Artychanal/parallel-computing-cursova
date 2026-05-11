@@ -18,16 +18,13 @@ public class BenchmarkService {
     private final int iterations;
 
     public BenchmarkService(List<DocumentData> documents, List<Integer> threadCounts, int iterations) {
-        this.documents = new ArrayList<DocumentData>(documents);
-        this.threadCounts = new ArrayList<Integer>(threadCounts);
+        this.documents = new ArrayList<>(documents);
+        this.threadCounts = new ArrayList<>(threadCounts);
         this.iterations = iterations;
     }
 
     public BenchmarkResult run() {
         SequentialTfidfVectorizer sequential = new SequentialTfidfVectorizer();
-
-        performWarmup(() -> sequential.vectorize(documents).getDocumentVectors().size(), WARMUP_RUNS);
-
         List<ParallelMeasurement> measurements = new ArrayList<>();
 
         for (Integer threadCount : threadCounts) {
@@ -41,10 +38,14 @@ public class BenchmarkService {
 
                 measurements.add(new ParallelMeasurement(
                         "Паралельний (" + threadCount + ")",
-                        averageMillis, 0.0, 0.0
+                        averageMillis,
+                        0.0,
+                        0.0
                 ));
             }
         }
+
+        performWarmup(() -> sequential.vectorize(documents).getDocumentVectors().size(), WARMUP_RUNS);
 
         double sequentialAverage = measureAverageMillis(
                 () -> sequential.vectorize(documents).getDocumentVectors().size(),
@@ -53,9 +54,9 @@ public class BenchmarkService {
 
         List<ParallelMeasurement> finalizedMeasurements = new ArrayList<>(measurements.size());
 
-        for (int i = 0; i < measurements.size(); i++) {
-            ParallelMeasurement measurement = measurements.get(i);
-            int threadCount = threadCounts.get(i);
+        for (int index = 0; index < measurements.size(); index++) {
+            ParallelMeasurement measurement = measurements.get(index);
+            int threadCount = threadCounts.get(index);
             double speedup = sequentialAverage / measurement.getAverageMillis();
             double efficiency = speedup / threadCount;
             finalizedMeasurements.add(new ParallelMeasurement(
@@ -72,7 +73,7 @@ public class BenchmarkService {
     private double measureAverageMillis(LongSupplier computation, int attempts) {
         long totalNanos = 0L;
 
-        for (int i = 0; i < attempts; i++) {
+        for (int attempt = 0; attempt < attempts; attempt++) {
             long start = System.nanoTime();
             blackhole = computation.getAsLong();
             long finish = System.nanoTime();
@@ -83,7 +84,7 @@ public class BenchmarkService {
     }
 
     private void performWarmup(LongSupplier computation, int warmupRuns) {
-        for (int i = 0; i < warmupRuns; i++) {
+        for (int run = 0; run < warmupRuns; run++) {
             blackhole = computation.getAsLong();
         }
     }

@@ -2,6 +2,7 @@ package kursova;
 
 public enum ExecutionMode {
     BENCHMARK,
+    QUICK_BENCHMARK,
     DEMO,
     PRODUCTION;
 
@@ -11,6 +12,9 @@ public enum ExecutionMode {
         }
 
         String normalized = args[0].trim().toLowerCase();
+        if ("quick".equals(normalized) || "quick-benchmark".equals(normalized) || "fast".equals(normalized)) {
+            return QUICK_BENCHMARK;
+        }
         if ("demo".equals(normalized) || "test".equals(normalized)) {
             return DEMO;
         }

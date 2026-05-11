@@ -1,6 +1,7 @@
 package kursova.io;
 
 import kursova.benchmark.BenchmarkResult;
+import kursova.benchmark.BenchmarkScenarioResult;
 import kursova.benchmark.CorpusScaleExperimentResult;
 import kursova.benchmark.CorpusScaleMeasurement;
 import kursova.benchmark.ParallelMeasurement;
@@ -35,12 +36,19 @@ public class ResultExporter {
     public void exportBenchmarkResults(
             Path outputDirectory,
             BenchmarkResult benchmarkResult,
-            CorpusScaleExperimentResult scaleResult
+            CorpusScaleExperimentResult scaleResult,
+            List<BenchmarkScenarioResult> scenarioResults
     ) {
         writeText(outputDirectory.resolve("benchmark_summary.txt"), benchmarkResult.toTable());
         writeText(outputDirectory.resolve("scale_summary.txt"), scaleResult.toTable());
         writeText(outputDirectory.resolve("benchmark_summary.csv"), buildBenchmarkCsv(benchmarkResult));
         writeText(outputDirectory.resolve("scale_experiment.csv"), buildScaleCsv(scaleResult));
+        writeText(outputDirectory.resolve("scenario_benchmarks.txt"), buildScenarioBenchmarkText(scenarioResults));
+        writeText(outputDirectory.resolve("scenario_benchmarks.csv"), buildScenarioBenchmarkCsv(scenarioResults));
+    }
+
+    public void exportAdditionalText(Path outputDirectory, String fileName, String content) {
+        writeText(outputDirectory.resolve(fileName), content);
     }
 
     public void exportProductionResults(
@@ -99,6 +107,54 @@ public class ResultExporter {
                     measurement.getBestParallelLabel(),
                     measurement.getBestSpeedup()
             ));
+        }
+
+        return builder.toString();
+    }
+
+    private String buildScenarioBenchmarkText(List<BenchmarkScenarioResult> scenarioResults) {
+        StringBuilder builder = new StringBuilder();
+
+        for (BenchmarkScenarioResult scenarioResult : scenarioResults) {
+            builder.append("Scenario: ")
+                    .append(scenarioResult.getScenarioLabel())
+                    .append(" (documents: ")
+                    .append(scenarioResult.getDocumentCount())
+                    .append(')')
+                    .append(System.lineSeparator());
+            builder.append(scenarioResult.getBenchmarkResult().toTable())
+                    .append(System.lineSeparator());
+        }
+
+        return builder.toString();
+    }
+
+    private String buildScenarioBenchmarkCsv(List<BenchmarkScenarioResult> scenarioResults) {
+        StringBuilder builder = new StringBuilder();
+        builder.append("scenario,documents,mode,average_millis,speedup,efficiency").append(System.lineSeparator());
+
+        for (BenchmarkScenarioResult scenarioResult : scenarioResults) {
+            BenchmarkResult benchmarkResult = scenarioResult.getBenchmarkResult();
+            builder.append(String.format(
+                    Locale.US,
+                    "\"%s\",%d,sequential,%.3f,,%n",
+                    scenarioResult.getScenarioLabel(),
+                    scenarioResult.getDocumentCount(),
+                    benchmarkResult.getSequentialAverageMillis()
+            ));
+
+            for (ParallelMeasurement measurement : benchmarkResult.getParallelMeasurements()) {
+                builder.append(String.format(
+                        Locale.US,
+                        "\"%s\",%d,\"%s\",%.3f,%.3f,%.3f%n",
+                        scenarioResult.getScenarioLabel(),
+                        scenarioResult.getDocumentCount(),
+                        measurement.getLabel(),
+                        measurement.getAverageMillis(),
+                        measurement.getSpeedup(),
+                        measurement.getEfficiency()
+                ));
+            }
         }
 
         return builder.toString();

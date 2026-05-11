@@ -13,7 +13,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
-public class ParallelTfidfVectorizer extends AbstractTfidfVectorizer implements AutoCloseable {
+public class FixedThreadPoolTfidfVectorizer extends AbstractTfidfVectorizer implements AutoCloseable {
 
     private static final int DEFAULT_TASKS_PER_WORKER = 8;
 
@@ -21,14 +21,14 @@ public class ParallelTfidfVectorizer extends AbstractTfidfVectorizer implements 
     private final int tasksPerWorker;
     private final ExecutorService executor;
 
-    public ParallelTfidfVectorizer(int threadCount) {
+    public FixedThreadPoolTfidfVectorizer(int threadCount) {
         this(threadCount, DEFAULT_TASKS_PER_WORKER);
     }
 
-    public ParallelTfidfVectorizer(int threadCount, int tasksPerWorker) {
+    public FixedThreadPoolTfidfVectorizer(int threadCount, int tasksPerWorker) {
         this.threadCount = Math.max(1, threadCount);
         this.tasksPerWorker = Math.max(1, tasksPerWorker);
-        this.executor = Executors.newWorkStealingPool(this.threadCount);
+        this.executor = Executors.newFixedThreadPool(this.threadCount);
     }
 
     @Override

@@ -205,7 +205,15 @@ public class PhaseTimingProfiler extends AbstractTfidfVectorizer {
             int totalDocuments = 0;
 
             for (Future<ExtractionSnapshot> future : futures) {
-                ExtractionSnapshot partial = getFutureValue(future);
+                ExtractionSnapshot partial;
+                try {
+                    partial = future.get();
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("Parallel execution was interrupted.", exception);
+                } catch (ExecutionException exception) {
+                    throw new IllegalStateException("Parallel processing failed.", exception);
+                }
                 partials.add(partial);
                 totalDocuments += partial.getDocumentTerms().size();
             }
@@ -250,7 +258,14 @@ public class PhaseTimingProfiler extends AbstractTfidfVectorizer {
             );
 
             for (Future<Map<String, Map<String, Double>>> future : futures) {
-                vectors.putAll(getFutureValue(future));
+                try {
+                    vectors.putAll(future.get());
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("Parallel execution was interrupted.", exception);
+                } catch (ExecutionException exception) {
+                    throw new IllegalStateException("Parallel processing failed.", exception);
+                }
             }
 
             return vectors;
@@ -259,17 +274,6 @@ public class PhaseTimingProfiler extends AbstractTfidfVectorizer {
         @Override
         public void close() {
             executor.shutdown();
-        }
-
-        private <T> T getFutureValue(Future<T> future) {
-            try {
-                return future.get();
-            } catch (InterruptedException exception) {
-                Thread.currentThread().interrupt();
-                throw new IllegalStateException("Parallel execution was interrupted.", exception);
-            } catch (ExecutionException exception) {
-                throw new IllegalStateException("Parallel processing failed.", exception);
-            }
         }
     }
 
